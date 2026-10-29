@@ -46,6 +46,22 @@ def checked_url(raw: str) -> str:
     return raw
 
 
+COOKIE_SRC = os.environ.get("YT_COOKIES_FILE", "/etc/secrets/cookies.txt")
+COOKIE_COPY = "/tmp/yt-cookies.txt"
+
+
+def cookie_file():
+    """Render secret files are read-only, but yt-dlp writes back to the cookie
+    file, so work on a writable copy."""
+    try:
+        if os.path.isfile(COOKIE_SRC):
+            shutil.copyfile(COOKIE_SRC, COOKIE_COPY)
+            return COOKIE_COPY
+    except OSError:
+        pass
+    return None
+
+
 def ydl_opts(extra=None):
     opts = {
         "quiet": True,
@@ -57,7 +73,13 @@ def ydl_opts(extra=None):
         "ignoreerrors": False,
         "nocheckcertificate": False,
         "geo_bypass": False,
+        # YouTube needs a JS runtime (node) to solve its player challenges.
+        "js_runtimes": {"node": {}},
+        "remote_components": ["ejs:github"],
     }
+    cf = cookie_file()
+    if cf:
+        opts["cookiefile"] = cf
     if extra:
         opts.update(extra)
     return opts
@@ -65,9 +87,12 @@ def ydl_opts(extra=None):
 
 def friendly_error(exc: Exception) -> str:
     message = str(exc)
+    print("yt-dlp error:", message[:500], flush=True)  # visible in Render logs
+    if "not a bot" in message.lower() or "confirm you" in message.lower():
+        return "YouTube is blocking the server right now (bot check). Please try again later."
     if "Unsupported URL" in message:
         return "This website or link type is not supported by the downloader."
-    if any(word in message.lower() for word in ("private video", "login", "sign in", "authentication", "members-only")):
+    if any(word in message.lower() for word in ("private video", "login", "sign in", "authentication", "members-only", "cookies")):
         return "This video requires login or special access. Vidora only supports publicly accessible content."
     if "DRM" in message.upper():
         return "This video appears to use DRM protection and cannot be downloaded by Vidora."
@@ -84,7 +109,7 @@ def root():
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "Vidora Backend", "version": "1.0.0"}
+    return {"ok": True, "service": "Vidora Backend", "version": "1.1.0", "cookies": os.path.isfile(COOKIE_SRC)}
 
 @app.post("/api/info")
 def info(body: InfoRequest):
